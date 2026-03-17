@@ -1,0 +1,69 @@
+package redis
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/insider/insider/internal/domain"
+	"github.com/insider/insider/internal/queue"
+	"github.com/insider/insider/internal/repository"
+)
+
+type Scheduler struct {
+	repo     repository.NotificationRepository
+	producer queue.Producer
+	logger   *slog.Logger
+	interval time.Duration
+}
+
+func NewScheduler(repo repository.NotificationRepository, producer queue.Producer, logger *slog.Logger) *Scheduler {
+	return &Scheduler{
+		repo:     repo,
+		producer: producer,
+		logger:   logger,
+		interval: time.Second,
+	}
+}
+
+func (s *Scheduler) Start(ctx context.Context) {
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+
+	s.logger.Info("scheduler started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("scheduler stopped")
+			return
+		case <-ticker.C:
+			s.poll(ctx)
+		}
+	}
+}
+
+func (s *Scheduler) poll(ctx context.Context) {
+	notifications, err := s.repo.GetPendingScheduled(ctx)
+	if err != nil {
+		s.logger.Error("scheduler poll failed", "error", err)
+		return
+	}
+
+	for _, n := range notifications {
+		msg := queue.Message{
+			NotificationID: n.ID,
+			Channel:        n.Channel,
+			Priority:       n.Priority,
+		}
+
+		if err := s.producer.Enqueue(ctx, msg); err != nil {
+			s.logger.Error("scheduler enqueue failed", "error", err, "id", n.ID)
+			continue
+		}
+
+		if err := s.repo.UpdateStatus(ctx, n.ID, domain.StatusQueued); err != nil {
+			s.logger.Error("scheduler status update failed", "error", err, "id", n.ID)
+		}
+	}
+}
