@@ -1,10 +1,53 @@
 services:
-  app:
+  api:
     build:
       context: ..
       dockerfile: deployments/Dockerfile
+    command: ["./api"]
     ports:
       - "8080:8080"
+    env_file:
+      - .env.example
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-sms:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    command: ["./worker-sms"]
+    env_file:
+      - .env.example
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-email:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    command: ["./worker-email"]
+    env_file:
+      - .env.example
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-push:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    command: ["./worker-push"]
     env_file:
       - .env.example
     depends_on:

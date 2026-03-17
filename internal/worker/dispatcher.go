@@ -48,15 +48,10 @@ func NewDispatcher(
 }
 
 func (d *Dispatcher) Start(ctx context.Context) {
-	// Start all worker pools
 	for ch, pool := range d.pools {
 		pool.Start(ctx)
-		d.logger.Info("worker pool started", "channel", ch)
-	}
-
-	// Start a dispatch loop per channel
-	for _, ch := range []domain.Channel{domain.ChannelSMS, domain.ChannelEmail, domain.ChannelPush} {
 		go d.dispatchLoop(ctx, ch)
+		d.logger.Info("worker pool started", "channel", ch)
 	}
 }
 
@@ -110,4 +105,39 @@ func (d *Dispatcher) Stop() {
 		d.logger.Info("stopping worker pool", "channel", ch)
 		pool.Stop()
 	}
+}
+
+// NewSingleChannelDispatcher creates a dispatcher for a single channel.
+// Used when running per-channel worker processes.
+func NewSingleChannelDispatcher(
+	consumer queue.Consumer,
+	rateLimiter *qredis.RateLimiter,
+	processor *Processor,
+	channel domain.Channel,
+	poolSize int,
+	metrics *observability.MetricsCollector,
+	logger *slog.Logger,
+	pollInterval time.Duration,
+) *Dispatcher {
+	pools := map[domain.Channel]*Pool{
+		channel: NewPool(poolSize),
+	}
+
+	return &Dispatcher{
+		consumer:     consumer,
+		rateLimiter:  rateLimiter,
+		processor:    processor,
+		pools:        pools,
+		metrics:      metrics,
+		logger:       logger,
+		pollInterval: pollInterval,
+	}
+}
+
+func (d *Dispatcher) Channels() []domain.Channel {
+	channels := make([]domain.Channel, 0, len(d.pools))
+	for ch := range d.pools {
+		channels = append(channels, ch)
+	}
+	return channels
 }
