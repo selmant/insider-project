@@ -214,3 +214,148 @@ func TestRateLimiter_WindowExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, allowed)
 }
+
+func TestConsumer_DequeueBatch(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	// Enqueue 5 messages
+	ids := make([]uuid.UUID, 5)
+	for i := range ids {
+		ids[i] = uuid.New()
+		require.NoError(t, producer.Enqueue(ctx, queue.Message{
+			NotificationID: ids[i],
+			Channel:        domain.ChannelSMS,
+			Priority:       domain.PriorityNormal,
+		}))
+		time.Sleep(time.Millisecond) // ensure different timestamps/scores
+	}
+
+	// Batch dequeue 3
+	msgs, err := consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 3)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 3)
+
+	// Remaining 2
+	msgs, err = consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 10)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 2)
+
+	// Empty now
+	msgs, err = consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 5)
+	require.NoError(t, err)
+	assert.Nil(t, msgs)
+}
+
+func TestConsumer_DequeueBatch_EmptyQueue(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	msgs, err := consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 10)
+	require.NoError(t, err)
+	assert.Nil(t, msgs)
+}
+
+func TestConsumer_DequeueBatch_PriorityOrdering(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	lowID := uuid.New()
+	normalID := uuid.New()
+	highID := uuid.New()
+
+	require.NoError(t, producer.Enqueue(ctx, queue.Message{
+		NotificationID: lowID,
+		Channel:        domain.ChannelEmail,
+		Priority:       domain.PriorityLow,
+	}))
+	time.Sleep(time.Millisecond)
+	require.NoError(t, producer.Enqueue(ctx, queue.Message{
+		NotificationID: normalID,
+		Channel:        domain.ChannelEmail,
+		Priority:       domain.PriorityNormal,
+	}))
+	time.Sleep(time.Millisecond)
+	require.NoError(t, producer.Enqueue(ctx, queue.Message{
+		NotificationID: highID,
+		Channel:        domain.ChannelEmail,
+		Priority:       domain.PriorityHigh,
+	}))
+
+	// Batch dequeue all 3 — should come out in priority order
+	msgs, err := consumer.DequeueBatch(ctx, string(domain.ChannelEmail), 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, highID, msgs[0].NotificationID)
+	assert.Equal(t, normalID, msgs[1].NotificationID)
+	assert.Equal(t, lowID, msgs[2].NotificationID)
+}
+
+func TestProducer_EnqueueBatch(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	msgs := []queue.Message{
+		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityNormal},
+		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityHigh},
+		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityLow},
+	}
+
+	err := producer.EnqueueBatch(ctx, msgs)
+	require.NoError(t, err)
+
+	// Dequeue all — should be in priority order
+	got, err := consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 10)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, msgs[1].NotificationID, got[0].NotificationID) // high
+	assert.Equal(t, msgs[0].NotificationID, got[1].NotificationID) // normal
+	assert.Equal(t, msgs[2].NotificationID, got[2].NotificationID) // low
+}
+
+func TestProducer_EnqueueBatch_MultiChannel(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	msgs := []queue.Message{
+		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityNormal},
+		{NotificationID: uuid.New(), Channel: domain.ChannelEmail, Priority: domain.PriorityNormal},
+		{NotificationID: uuid.New(), Channel: domain.ChannelPush, Priority: domain.PriorityNormal},
+	}
+
+	err := producer.EnqueueBatch(ctx, msgs)
+	require.NoError(t, err)
+
+	// Each channel should have exactly one message
+	for _, ch := range []domain.Channel{domain.ChannelSMS, domain.ChannelEmail, domain.ChannelPush} {
+		got, err := consumer.DequeueBatch(ctx, string(ch), 10)
+		require.NoError(t, err)
+		assert.Len(t, got, 1, "channel %s", ch)
+	}
+}
+
+func TestProducer_EnqueueBatch_Empty(t *testing.T) {
+	ctx := context.Background()
+
+	producer := qredis.NewProducer(redisContainer.Client)
+
+	err := producer.EnqueueBatch(ctx, nil)
+	require.NoError(t, err)
+
+	err = producer.EnqueueBatch(ctx, []queue.Message{})
+	require.NoError(t, err)
+}

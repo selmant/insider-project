@@ -282,3 +282,172 @@ func TestNotificationRepo_GetPendingForRecovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 }
+
+func TestNotificationRepo_GetAndMarkProcessing(t *testing.T) {
+	repo := setupNotificationRepo(t)
+	ctx := context.Background()
+
+	t.Run("from pending", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelSMS)
+		n.Status = domain.StatusPending
+		require.NoError(t, repo.Create(ctx, n))
+
+		got, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		require.NoError(t, err)
+		assert.Equal(t, domain.StatusProcessing, got.Status)
+		assert.Equal(t, n.ID, got.ID)
+		assert.Equal(t, n.Recipient, got.Recipient)
+	})
+
+	t.Run("from queued", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelEmail)
+		n.Status = domain.StatusQueued
+		require.NoError(t, repo.Create(ctx, n))
+
+		got, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		require.NoError(t, err)
+		assert.Equal(t, domain.StatusProcessing, got.Status)
+	})
+
+	t.Run("cancelled returns not found", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelSMS)
+		n.Status = domain.StatusCancelled
+		require.NoError(t, repo.Create(ctx, n))
+
+		_, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		assert.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("already processing returns not found", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelSMS)
+		n.Status = domain.StatusProcessing
+		require.NoError(t, repo.Create(ctx, n))
+
+		_, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		assert.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("sent returns not found", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelSMS)
+		n.Status = domain.StatusSent
+		require.NoError(t, repo.Create(ctx, n))
+
+		_, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		assert.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("nonexistent ID returns not found", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		_, err := repo.GetAndMarkProcessing(ctx, uuid.New())
+		assert.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("idempotent - second call returns not found", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelSMS)
+		n.Status = domain.StatusQueued
+		require.NoError(t, repo.Create(ctx, n))
+
+		// First call succeeds
+		got, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		require.NoError(t, err)
+		assert.Equal(t, domain.StatusProcessing, got.Status)
+
+		// Second call fails — already processing
+		_, err = repo.GetAndMarkProcessing(ctx, n.ID)
+		assert.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("preserves template vars", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		n := newNotification(domain.ChannelEmail)
+		n.Status = domain.StatusQueued
+		n.TemplateVars = map[string]interface{}{"name": "Alice", "code": "1234"}
+		require.NoError(t, repo.Create(ctx, n))
+
+		got, err := repo.GetAndMarkProcessing(ctx, n.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Alice", got.TemplateVars["name"])
+		assert.Equal(t, "1234", got.TemplateVars["code"])
+	})
+}
+
+func TestNotificationRepo_UpdateBatchStatus(t *testing.T) {
+	repo := setupNotificationRepo(t)
+	ctx := context.Background()
+
+	t.Run("updates multiple notifications", func(t *testing.T) {
+		require.NoError(t, pgContainer.TruncateTables(ctx))
+		ids := make([]uuid.UUID, 3)
+		for i := range ids {
+			n := newNotification(domain.ChannelSMS)
+			require.NoError(t, repo.Create(ctx, n))
+			ids[i] = n.ID
+		}
+
+		err := repo.UpdateBatchStatus(ctx, ids, domain.StatusQueued)
+		require.NoError(t, err)
+
+		for _, id := range ids {
+			got, err := repo.GetByID(ctx, id)
+			require.NoError(t, err)
+			assert.Equal(t, domain.StatusQueued, got.Status)
+		}
+	})
+
+	t.Run("empty ids does not error", func(t *testing.T) {
+		err := repo.UpdateBatchStatus(ctx, []uuid.UUID{}, domain.StatusQueued)
+		require.NoError(t, err)
+	})
+}
+
+func TestNotificationRepo_List_CursorPagination(t *testing.T) {
+	repo := setupNotificationRepo(t)
+	ctx := context.Background()
+	require.NoError(t, pgContainer.TruncateTables(ctx))
+
+	// Create 5 notifications with different timestamps
+	var notifications []*domain.Notification
+	for i := 0; i < 5; i++ {
+		n := newNotification(domain.ChannelSMS)
+		n.CreatedAt = time.Now().Add(time.Duration(i) * time.Second).Truncate(time.Microsecond)
+		n.UpdatedAt = n.CreatedAt
+		require.NoError(t, repo.Create(ctx, n))
+		notifications = append(notifications, n)
+	}
+
+	// First page: no cursor, limit 2
+	results, total, err := repo.List(ctx, repository.NotificationFilter{Limit: 2})
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.True(t, total > 0)
+	// Results ordered by created_at DESC, so newest first
+	assert.Equal(t, notifications[4].ID, results[0].ID)
+	assert.Equal(t, notifications[3].ID, results[1].ID)
+
+	// Second page: use cursor from last result
+	cursor := results[len(results)-1].CreatedAt
+	results2, _, err := repo.List(ctx, repository.NotificationFilter{
+		Limit:  2,
+		Cursor: &cursor,
+	})
+	require.NoError(t, err)
+	assert.Len(t, results2, 2)
+	assert.Equal(t, notifications[2].ID, results2[0].ID)
+	assert.Equal(t, notifications[1].ID, results2[1].ID)
+
+	// Third page
+	cursor2 := results2[len(results2)-1].CreatedAt
+	results3, _, err := repo.List(ctx, repository.NotificationFilter{
+		Limit:  2,
+		Cursor: &cursor2,
+	})
+	require.NoError(t, err)
+	assert.Len(t, results3, 1)
+	assert.Equal(t, notifications[0].ID, results3[0].ID)
+}

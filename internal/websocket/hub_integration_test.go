@@ -126,3 +126,113 @@ func TestWebSocket_Disconnect(t *testing.T) {
 		Status: "sent",
 	})
 }
+
+func TestWebSocket_ChannelFiltering(t *testing.T) {
+	hub, srv := setupHubServer(t)
+
+	// Connect two clients
+	smsConn := connectWS(t, srv)
+	allConn := connectWS(t, srv)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 2, hub.Len())
+
+	// Subscribe smsConn to only "sms"
+	subMsg, _ := json.Marshal(ws.SubscribeMessage{
+		Type:     "subscribe",
+		Channels: []string{"sms"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := smsConn.Write(ctx, cws.MessageText, subMsg)
+	require.NoError(t, err)
+
+	// Give time for the subscribe to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Broadcast an email event
+	hub.Broadcast(ws.Event{
+		Type:           "notification.sent",
+		NotificationID: "email-123",
+		Channel:        "email",
+		Status:         "sent",
+	})
+
+	// allConn (no filter) should receive it
+	ev := readEvent(t, allConn)
+	assert.Equal(t, "email-123", ev.NotificationID)
+
+	// smsConn should NOT receive the email event — instead broadcast sms
+	hub.Broadcast(ws.Event{
+		Type:           "notification.sent",
+		NotificationID: "sms-456",
+		Channel:        "sms",
+		Status:         "sent",
+	})
+
+	// smsConn should receive the sms event
+	ev = readEvent(t, smsConn)
+	assert.Equal(t, "sms-456", ev.NotificationID)
+	assert.Equal(t, "sms", ev.Channel)
+
+	// allConn should also receive it
+	ev = readEvent(t, allConn)
+	assert.Equal(t, "sms-456", ev.NotificationID)
+}
+
+func TestWebSocket_SubscribeMultipleChannels(t *testing.T) {
+	hub, srv := setupHubServer(t)
+
+	conn := connectWS(t, srv)
+	time.Sleep(50 * time.Millisecond)
+
+	// Subscribe to sms and email
+	subMsg, _ := json.Marshal(ws.SubscribeMessage{
+		Type:     "subscribe",
+		Channels: []string{"sms", "email"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, conn.Write(ctx, cws.MessageText, subMsg))
+	time.Sleep(50 * time.Millisecond)
+
+	// Broadcast push event — should be filtered out
+	hub.Broadcast(ws.Event{
+		Type:           "notification.sent",
+		Channel:        "push",
+		Status:         "sent",
+		NotificationID: "push-1",
+	})
+
+	// Broadcast sms event — should be received
+	hub.Broadcast(ws.Event{
+		Type:           "notification.sent",
+		Channel:        "sms",
+		Status:         "sent",
+		NotificationID: "sms-1",
+	})
+
+	ev := readEvent(t, conn)
+	assert.Equal(t, "sms-1", ev.NotificationID)
+	assert.Equal(t, "sms", ev.Channel)
+}
+
+func TestWebSocket_NoFilterReceivesAll(t *testing.T) {
+	hub, srv := setupHubServer(t)
+	conn := connectWS(t, srv)
+	time.Sleep(50 * time.Millisecond)
+
+	// No subscribe message sent — should receive all channels
+	for _, ch := range []string{"sms", "email", "push"} {
+		hub.Broadcast(ws.Event{
+			Type:           "notification.sent",
+			NotificationID: ch + "-msg",
+			Channel:        ch,
+			Status:         "sent",
+		})
+
+		ev := readEvent(t, conn)
+		assert.Equal(t, ch+"-msg", ev.NotificationID)
+		assert.Equal(t, ch, ev.Channel)
+	}
+}

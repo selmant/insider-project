@@ -32,7 +32,7 @@ func TestScheduler_EnqueuesDueNotifications(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, n))
 
 	// Run scheduler for a short period
-	scheduler := qredis.NewScheduler(repo, producer, slog.Default())
+	scheduler := qredis.NewScheduler(repo, producer, redisContainer.Client, slog.Default())
 	sctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	scheduler.Start(sctx)
@@ -65,7 +65,7 @@ func TestScheduler_IgnoresFutureNotifications(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, n))
 
 	// Run scheduler briefly
-	scheduler := qredis.NewScheduler(repo, producer, slog.Default())
+	scheduler := qredis.NewScheduler(repo, producer, redisContainer.Client, slog.Default())
 	sctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	scheduler.Start(sctx)
@@ -96,7 +96,7 @@ func TestScheduler_IgnoresNonScheduled(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, n1))
 	require.NoError(t, repo.Create(ctx, n2))
 
-	scheduler := qredis.NewScheduler(repo, producer, slog.Default())
+	scheduler := qredis.NewScheduler(repo, producer, redisContainer.Client, slog.Default())
 	sctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	scheduler.Start(sctx)
