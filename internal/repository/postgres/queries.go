@@ -74,6 +74,14 @@ const (
 	updateBatchStatus = `
 		UPDATE notifications SET status = $2, updated_at = NOW() WHERE id = ANY($1)`
 
+	getAndMarkProcessingBatch = `
+		UPDATE notifications
+		SET status = 'processing', updated_at = NOW()
+		WHERE id = ANY($1) AND status IN ('pending', 'queued')
+		RETURNING id, batch_id, idempotency_key, recipient, channel, content, priority, status,
+			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
+			last_error, sent_at, created_at, updated_at`
+
 	insertDeadLetter = `
 		INSERT INTO dead_letters (id, notification_id, last_error, attempts, failed_at)
 		VALUES ($1, $2, $3, $4, $5)`

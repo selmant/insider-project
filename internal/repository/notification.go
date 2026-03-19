@@ -29,5 +29,7 @@ type NotificationRepository interface {
 	GetPendingScheduled(ctx context.Context) ([]*domain.Notification, error)
 	GetPendingForRecovery(ctx context.Context) ([]*domain.Notification, error)
 	GetAndMarkProcessing(ctx context.Context, id uuid.UUID) (*domain.Notification, error)
+	GetAndMarkProcessingBatch(ctx context.Context, ids []uuid.UUID) ([]*domain.Notification, error)
 	UpdateBatchStatus(ctx context.Context, ids []uuid.UUID, status domain.Status) error
+	UpdateBatchSent(ctx context.Context, ids []uuid.UUID, providerMsgIDs []string) error
 }

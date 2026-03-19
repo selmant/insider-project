@@ -71,6 +71,48 @@ func (h *Hub) Broadcast(event Event) {
 	}
 }
 
+func (h *Hub) BroadcastBatch(events []Event) {
+	if len(events) == 0 {
+		return
+	}
+
+	type batchPayload struct {
+		Type   string  `json:"type"`
+		Events []Event `json:"events"`
+	}
+
+	data, err := json.Marshal(batchPayload{
+		Type:   "notification.batch",
+		Events: events,
+	})
+	if err != nil {
+		h.logger.Error("marshal websocket batch event", "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for client := range h.clients {
+		// Check if client wants any of the events' channels
+		wants := false
+		for _, e := range events {
+			if client.WantsEvent(e.Channel) {
+				wants = true
+				break
+			}
+		}
+		if !wants {
+			continue
+		}
+		select {
+		case client.send <- data:
+		default:
+			// Buffer full, skip
+		}
+	}
+}
+
 func (h *Hub) Len() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

@@ -36,7 +36,7 @@ Event-driven notification system built with Go, designed to send millions of not
 - **Separate binaries per channel** — Each worker (`worker-sms`, `worker-email`, `worker-push`) runs as its own process for independent scaling and high availability
 - **Redis sorted sets for queuing** — Score = `priority * 1e12 + unix_nano` ensures priority ordering with FIFO within same priority
 - **ZPOPMIN for atomic dequeue** — No duplicate processing without distributed locks
-- **Sliding window rate limiter** — Lua script in Redis for atomic per-channel rate limiting
+- **Sliding window rate limiter** — Lua script in Redis for atomic per-channel rate limiting with batch support (`AllowN` returns how many of N requested are permitted)
 - **Circuit breaker** — Protects provider calls with closed/open/half-open state machine
 
 ## Tech Stack
@@ -240,13 +240,19 @@ Connect to `ws://localhost:8080/ws/notifications` to receive real-time status ev
 {"type":"notification.retrying","notification_id":"...","channel":"push","status":"queued","error":"retry 2/5 in 4s: ..."}
 ```
 
+Batch-processed notifications are delivered as a single message to reduce WebSocket overhead:
+
+```json
+{"type":"notification.batch","events":[{"type":"notification.sent","notification_id":"...","channel":"sms","status":"sent"}, ...]}
+```
+
 ## Processing Pipeline
 
-1. **API** receives notification, persists to PostgreSQL, enqueues to Redis
+1. **API** receives notification, persists to PostgreSQL, enqueues to Redis. Batch creates update statuses in a single DB call
 2. **Scheduler** polls DB every second for due scheduled notifications, enqueues them
-3. **Dispatcher** polls Redis per-channel with rate limiting, submits to goroutine pool
-4. **Processor** fetches notification from DB, sends via provider:
-   - **Success** — marks as `sent`, broadcasts WebSocket event
+3. **Dispatcher** checks batch rate limit (`AllowN`), dequeues up to the allowed count, submits the batch to the goroutine pool. Uses eager polling — immediately re-polls when a full batch is returned instead of waiting for the next tick
+4. **Processor** batch-fetches notifications from DB in a single `UPDATE ... RETURNING` query, sends each to the provider, then batch-updates sent statuses:
+   - **Success** — batch-marks as `sent`, broadcasts a single batched WebSocket event
    - **Failure** — increments attempts, re-queues with exponential backoff + jitter
    - **Max retries exhausted** — marks as `failed`, inserts dead letter record
 5. **Recovery sweep** — on worker startup, re-enqueues stuck `pending`/`queued` notifications

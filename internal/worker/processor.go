@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/insider/insider/internal/domain"
 	"github.com/insider/insider/internal/observability"
 	"github.com/insider/insider/internal/provider"
@@ -76,6 +78,71 @@ func (p *Processor) Process(ctx context.Context, msg queue.Message) {
 		Channel:        string(n.Channel),
 		Status:         string(domain.StatusSent),
 	})
+}
+
+func (p *Processor) ProcessBatch(ctx context.Context, msgs []queue.Message) {
+	if len(msgs) == 0 {
+		return
+	}
+
+	// Collect IDs for batch DB fetch
+	ids := make([]uuid.UUID, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.NotificationID
+	}
+
+	// Single DB call to get and mark all as processing
+	notifications, err := p.repo.GetAndMarkProcessingBatch(ctx, ids)
+	if err != nil {
+		p.logger.Error("get and mark processing batch", "error", err)
+		return
+	}
+	if len(notifications) == 0 {
+		return
+	}
+
+	// Build a map from ID to message for retry handling
+	msgMap := make(map[uuid.UUID]queue.Message, len(msgs))
+	for _, m := range msgs {
+		msgMap[m.NotificationID] = m
+	}
+
+	// Send each to provider individually (external API constraint)
+	var sentIDs []uuid.UUID
+	var sentProviderIDs []string
+	var sentEvents []ws.Event
+
+	for _, n := range notifications {
+		providerMsgID, err := p.provider.Send(ctx, n)
+		if err != nil {
+			// handleFailure does its own DB updates and broadcasts for failures
+			msg := msgMap[n.ID]
+			p.handleFailure(ctx, n, msg, err)
+			continue
+		}
+
+		sentIDs = append(sentIDs, n.ID)
+		sentProviderIDs = append(sentProviderIDs, providerMsgID)
+		p.metrics.IncrSent(n.Channel)
+		sentEvents = append(sentEvents, ws.Event{
+			Type:           "notification.sent",
+			NotificationID: n.ID.String(),
+			Channel:        string(n.Channel),
+			Status:         string(domain.StatusSent),
+		})
+	}
+
+	// Batch update sent statuses in one DB call
+	if len(sentIDs) > 0 {
+		if err := p.repo.UpdateBatchSent(ctx, sentIDs, sentProviderIDs); err != nil {
+			p.logger.Error("batch update sent status", "error", err)
+		}
+	}
+
+	// Batch broadcast sent events
+	if len(sentEvents) > 0 {
+		p.hub.BroadcastBatch(sentEvents)
+	}
 }
 
 func (p *Processor) handleFailure(ctx context.Context, n *domain.Notification, msg queue.Message, sendErr error) {

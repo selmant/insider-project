@@ -352,11 +352,9 @@ func (h *NotificationHandler) batchEnqueue(r *http.Request, notifications []*dom
 		return err
 	}
 
-	// Update statuses to queued
-	for _, id := range toUpdate {
-		if err := h.repo.UpdateStatus(r.Context(), id, domain.StatusQueued); err != nil {
-			h.logger.Error("update queued status", "error", err, "id", id)
-		}
+	// Update statuses to queued in a single batch call
+	if err := h.repo.UpdateBatchStatus(r.Context(), toUpdate, domain.StatusQueued); err != nil {
+		h.logger.Error("update batch queued status", "error", err)
 	}
 
 	return nil

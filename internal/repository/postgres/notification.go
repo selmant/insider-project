@@ -276,9 +276,35 @@ func (r *NotificationRepo) GetAndMarkProcessing(ctx context.Context, id uuid.UUI
 	return n, nil
 }
 
+func (r *NotificationRepo) GetAndMarkProcessingBatch(ctx context.Context, ids []uuid.UUID) ([]*domain.Notification, error) {
+	rows, err := r.pool.Query(ctx, getAndMarkProcessingBatch, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get and mark processing batch: %w", err)
+	}
+	defer rows.Close()
+	return scanNotifications(rows)
+}
+
 func (r *NotificationRepo) UpdateBatchStatus(ctx context.Context, ids []uuid.UUID, status domain.Status) error {
 	_, err := r.pool.Exec(ctx, updateBatchStatus, ids, status)
 	return err
+}
+
+func (r *NotificationRepo) UpdateBatchSent(ctx context.Context, ids []uuid.UUID, providerMsgIDs []string) error {
+	batch := &pgx.Batch{}
+	for i, id := range ids {
+		batch.Queue(updateNotificationSent, id, providerMsgIDs[i])
+	}
+
+	br := r.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	for range ids {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("batch update sent: %w", err)
+		}
+	}
+	return nil
 }
 
 func scanNotifications(rows pgx.Rows) ([]*domain.Notification, error) {

@@ -74,39 +74,53 @@ func (d *Dispatcher) dispatchLoop(ctx context.Context, channel domain.Channel) {
 			d.logger.Info("dispatch loop stopped", "channel", channel)
 			return
 		case <-ticker.C:
-			d.dispatch(ctx, channel)
+			// Eager polling: if we got a full batch, immediately poll again
+			for {
+				n := d.dispatch(ctx, channel)
+				if n < d.batchSize {
+					break
+				}
+				// Check context before re-polling
+				if ctx.Err() != nil {
+					return
+				}
+			}
 		}
 	}
 }
 
-func (d *Dispatcher) dispatch(ctx context.Context, channel domain.Channel) {
-	// Check rate limit
-	allowed, err := d.rateLimiter.Allow(ctx, channel)
+// dispatch dequeues and processes a batch. Returns the number of messages processed.
+func (d *Dispatcher) dispatch(ctx context.Context, channel domain.Channel) int {
+	// Check rate limit for the full batch size
+	allowed, err := d.rateLimiter.AllowN(ctx, channel, d.batchSize)
 	if err != nil {
 		d.logger.Error("rate limit check failed", "error", err, "channel", channel)
-		return
+		return 0
 	}
-	if !allowed {
-		return
+	if allowed == 0 {
+		return 0
 	}
 
-	msgs, err := d.consumer.DequeueBatch(ctx, string(channel), d.batchSize)
+	msgs, err := d.consumer.DequeueBatch(ctx, string(channel), allowed)
 	if err != nil {
 		d.logger.Error("dequeue batch failed", "error", err, "channel", channel)
-		return
+		return 0
 	}
 	if len(msgs) == 0 {
-		return
+		return 0
+	}
+
+	for range msgs {
+		d.metrics.IncrProcessing(channel)
 	}
 
 	pool := d.pools[channel]
-	for _, msg := range msgs {
-		d.metrics.IncrProcessing(channel)
-		m := msg // capture loop variable
-		pool.Submit(func() {
-			d.processor.Process(ctx, m)
-		})
-	}
+	batch := msgs // capture for closure
+	pool.Submit(func() {
+		d.processor.ProcessBatch(ctx, batch)
+	})
+
+	return len(msgs)
 }
 
 func (d *Dispatcher) Stop() {
