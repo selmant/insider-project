@@ -58,11 +58,11 @@ func NewInfra(ctx context.Context, logger *slog.Logger) (*Infra, error) {
 		return nil, fmt.Errorf("open sql db for migrations: %w", err)
 	}
 	if err := migration.Run(sqlDB); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		pool.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	sqlDB.Close()
+	_ = sqlDB.Close()
 	logger.Info("migrations applied")
 
 	rdb := redis.NewClient(&redis.Options{
@@ -105,5 +105,5 @@ func NewInfra(ctx context.Context, logger *slog.Logger) (*Infra, error) {
 
 func (i *Infra) Close() {
 	i.DB.Close()
-	i.Redis.Close()
+	_ = i.Redis.Close()
 }

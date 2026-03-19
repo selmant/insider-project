@@ -60,7 +60,7 @@ func (r *NotificationRepo) CreateBatch(ctx context.Context, notifications []*dom
 	}
 
 	br := r.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range notifications {
 		if _, err := br.Exec(); err != nil {
@@ -296,7 +296,7 @@ func (r *NotificationRepo) UpdateBatchSent(ctx context.Context, ids []uuid.UUID,
 	}
 
 	br := r.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range ids {
 		if _, err := br.Exec(); err != nil {

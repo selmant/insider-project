@@ -27,7 +27,7 @@ func TestGzip_CompressesWhenAccepted(t *testing.T) {
 	// Decompress and verify
 	gr, err := gzip.NewReader(w.Body)
 	require.NoError(t, err)
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 	body, err := io.ReadAll(gr)
 	require.NoError(t, err)
 	assert.Equal(t, `{"status":"ok"}`, string(body))
@@ -77,7 +77,7 @@ func TestGzip_SetsContentEncodingHeader(t *testing.T) {
 	// Verify the body is valid gzip
 	gr, err := gzip.NewReader(w.Body)
 	require.NoError(t, err)
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 	body, err := io.ReadAll(gr)
 	require.NoError(t, err)
 	assert.Equal(t, "test", string(body))

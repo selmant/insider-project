@@ -50,10 +50,10 @@ func SetupPostgres(ctx context.Context) (*PostgresContainer, error) {
 		return nil, fmt.Errorf("open sql connection: %w", err)
 	}
 	if err := migration.Run(sqlDB); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	sqlDB.Close()
+	_ = sqlDB.Close()
 
 	// Create pgxpool for the repo
 	pool, err := pgxpool.New(ctx, connStr)
