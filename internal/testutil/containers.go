@@ -125,7 +125,7 @@ func SetupRedis(ctx context.Context) (*RedisContainer, error) {
 
 func (rc *RedisContainer) Cleanup(ctx context.Context) {
 	if rc.Client != nil {
-		rc.Client.Close()
+		_ = rc.Client.Close()
 	}
 	if rc.Container != nil {
 		_ = rc.Container.Terminate(ctx)
