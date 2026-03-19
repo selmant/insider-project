@@ -36,3 +36,25 @@ func (c *Consumer) Dequeue(ctx context.Context, channel string) (*queue.Message,
 
 	return &msg, nil
 }
+
+func (c *Consumer) DequeueBatch(ctx context.Context, channel string, count int) ([]queue.Message, error) {
+	key := queuePrefix + channel
+
+	results, err := c.client.ZPopMin(ctx, key, int64(count)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("zpopmin batch: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	msgs := make([]queue.Message, 0, len(results))
+	for _, r := range results {
+		var msg queue.Message
+		if err := json.Unmarshal([]byte(r.Member.(string)), &msg); err != nil {
+			return nil, fmt.Errorf("unmarshal message: %w", err)
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
+}

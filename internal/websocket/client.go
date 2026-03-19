@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/coder/websocket"
@@ -13,19 +14,27 @@ const (
 	sendBuffer = 256
 )
 
+// SubscribeMessage is sent by clients to filter events.
+type SubscribeMessage struct {
+	Type     string   `json:"type"`
+	Channels []string `json:"channels,omitempty"`
+}
+
 type Client struct {
-	conn *websocket.Conn
-	hub  *Hub
-	send chan []byte
-	ctx  context.Context
+	conn     *websocket.Conn
+	hub      *Hub
+	send     chan []byte
+	ctx      context.Context
+	channels map[string]struct{} // subscribed channels; empty = all
 }
 
 func NewClient(conn *websocket.Conn, hub *Hub, ctx context.Context) *Client {
 	return &Client{
-		conn: conn,
-		hub:  hub,
-		send: make(chan []byte, sendBuffer),
-		ctx:  ctx,
+		conn:     conn,
+		hub:      hub,
+		send:     make(chan []byte, sendBuffer),
+		ctx:      ctx,
+		channels: make(map[string]struct{}),
 	}
 }
 
@@ -36,11 +45,24 @@ func (c *Client) ReadPump() {
 	}()
 
 	for {
-		_, _, err := c.conn.Read(c.ctx)
+		_, data, err := c.conn.Read(c.ctx)
 		if err != nil {
 			return
 		}
-		// We don't process incoming messages; clients are read-only subscribers
+
+		var msg SubscribeMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+
+		if msg.Type == "subscribe" {
+			c.hub.mu.Lock()
+			c.channels = make(map[string]struct{})
+			for _, ch := range msg.Channels {
+				c.channels[ch] = struct{}{}
+			}
+			c.hub.mu.Unlock()
+		}
 	}
 }
 
@@ -63,4 +85,13 @@ func (c *Client) WritePump() {
 			}
 		}
 	}
+}
+
+// WantsEvent returns true if the client should receive events for the given channel.
+func (c *Client) WantsEvent(channel string) bool {
+	if len(c.channels) == 0 {
+		return true // no filter = receive all
+	}
+	_, ok := c.channels[channel]
+	return ok
 }

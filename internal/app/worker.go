@@ -51,10 +51,11 @@ func RunWorker(ctx context.Context, infra *Infra, channel domain.Channel, logger
 	dispatcher := worker.NewSingleChannelDispatcher(
 		consumer, rateLimiter, processor, channel,
 		cfg.Worker.PoolSize, metrics, logger, cfg.Worker.PollInterval,
+		cfg.Worker.BatchSize,
 	)
 
 	// Scheduler (each worker picks up scheduled notifications for its channel)
-	scheduler := qredis.NewScheduler(notifRepo, producer, logger)
+	scheduler := qredis.NewScheduler(notifRepo, producer, infra.Redis, logger)
 
 	// Recovery sweep for this channel
 	go func() {

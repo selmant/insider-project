@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -45,20 +46,13 @@ func NewProcessor(
 }
 
 func (p *Processor) Process(ctx context.Context, msg queue.Message) {
-	n, err := p.repo.GetByID(ctx, msg.NotificationID)
+	n, err := p.repo.GetAndMarkProcessing(ctx, msg.NotificationID)
 	if err != nil {
-		p.logger.Error("get notification for processing", "error", err, "id", msg.NotificationID)
-		return
-	}
-
-	// Check if cancelled
-	if n.Status == domain.StatusCancelled {
-		return
-	}
-
-	// Mark as processing
-	if err := p.repo.UpdateStatus(ctx, n.ID, domain.StatusProcessing); err != nil {
-		p.logger.Error("update status to processing", "error", err, "id", n.ID)
+		if errors.Is(err, domain.ErrNotFound) {
+			// Already processed, cancelled, or doesn't exist — skip silently
+			return
+		}
+		p.logger.Error("get and mark notification for processing", "error", err, "id", msg.NotificationID)
 		return
 	}
 

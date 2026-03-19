@@ -125,10 +125,8 @@ func (h *NotificationHandler) BatchCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	for _, n := range notifications {
-		if err := h.enqueue(r, n); err != nil {
-			h.logger.Error("enqueue batch notification", "error", err, "id", n.ID)
-		}
+	if err := h.batchEnqueue(r, notifications); err != nil {
+		h.logger.Error("batch enqueue notifications", "error", err)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -245,6 +243,12 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 			filter.Offset = o
 		}
 	}
+	if v := r.URL.Query().Get("cursor"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err == nil {
+			filter.Cursor = &t
+		}
+	}
 
 	notifications, total, err := h.repo.List(r.Context(), filter)
 	if err != nil {
@@ -253,12 +257,16 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"notifications": notifications,
 		"total":         total,
 		"limit":         filter.Limit,
 		"offset":        filter.Offset,
-	})
+	}
+	if len(notifications) > 0 {
+		resp["next_cursor"] = notifications[len(notifications)-1].CreatedAt.Format(time.RFC3339Nano)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *NotificationHandler) buildNotification(r *http.Request, req CreateNotificationRequest) (*domain.Notification, error) {
@@ -316,6 +324,42 @@ func (h *NotificationHandler) buildNotification(r *http.Request, req CreateNotif
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
+}
+
+func (h *NotificationHandler) batchEnqueue(r *http.Request, notifications []*domain.Notification) error {
+	var msgs []queue.Message
+	var toUpdate []uuid.UUID
+
+	for _, n := range notifications {
+		if n.Status == domain.StatusScheduled {
+			continue // Scheduler will pick it up
+		}
+
+		msgs = append(msgs, queue.Message{
+			NotificationID: n.ID,
+			Channel:        n.Channel,
+			Priority:       n.Priority,
+			ScheduledAt:    n.ScheduledAt,
+		})
+		toUpdate = append(toUpdate, n.ID)
+	}
+
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	if err := h.producer.EnqueueBatch(r.Context(), msgs); err != nil {
+		return err
+	}
+
+	// Update statuses to queued
+	for _, id := range toUpdate {
+		if err := h.repo.UpdateStatus(r.Context(), id, domain.StatusQueued); err != nil {
+			h.logger.Error("update queued status", "error", err, "id", id)
+		}
+	}
+
+	return nil
 }
 
 func (h *NotificationHandler) enqueue(r *http.Request, n *domain.Notification) error {

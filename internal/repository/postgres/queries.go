@@ -16,7 +16,7 @@ const (
 		SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
 			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
 			last_error, sent_at, created_at, updated_at
-		FROM notifications WHERE batch_id = $1 ORDER BY created_at`
+		FROM notifications WHERE batch_id = $1 ORDER BY created_at LIMIT 1000`
 
 	updateNotificationStatus = `
 		UPDATE notifications SET status = $2, updated_at = NOW() WHERE id = $1`
@@ -31,13 +31,15 @@ const (
 		SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
 			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
 			last_error, sent_at, created_at, updated_at
-		FROM notifications WHERE status = 'scheduled' AND scheduled_at <= NOW()`
+		FROM notifications WHERE status = 'scheduled' AND scheduled_at <= NOW()
+		ORDER BY scheduled_at ASC LIMIT $1`
 
 	selectPendingForRecovery = `
 		SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
 			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
 			last_error, sent_at, created_at, updated_at
-		FROM notifications WHERE status IN ('pending', 'queued') AND scheduled_at IS NULL`
+		FROM notifications WHERE status IN ('pending', 'queued') AND scheduled_at IS NULL
+		ORDER BY created_at ASC LIMIT $1`
 
 	insertTemplate = `
 		INSERT INTO templates (id, name, channel, content, variables, created_at, updated_at)
@@ -60,6 +62,17 @@ const (
 	selectAllTemplates = `
 		SELECT id, name, channel, content, variables, created_at, updated_at
 		FROM templates ORDER BY name`
+
+	getAndMarkProcessing = `
+		UPDATE notifications
+		SET status = 'processing', updated_at = NOW()
+		WHERE id = $1 AND status IN ('pending', 'queued')
+		RETURNING id, batch_id, idempotency_key, recipient, channel, content, priority, status,
+			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
+			last_error, sent_at, created_at, updated_at`
+
+	updateBatchStatus = `
+		UPDATE notifications SET status = $2, updated_at = NOW() WHERE id = ANY($1)`
 
 	insertDeadLetter = `
 		INSERT INTO dead_letters (id, notification_id, last_error, attempts, failed_at)

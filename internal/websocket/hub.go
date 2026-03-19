@@ -60,6 +60,9 @@ func (h *Hub) Broadcast(event Event) {
 	defer h.mu.RUnlock()
 
 	for client := range h.clients {
+		if !client.WantsEvent(event.Channel) {
+			continue
+		}
 		select {
 		case client.send <- data:
 		default:

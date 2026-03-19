@@ -143,17 +143,57 @@ func (r *NotificationRepo) List(ctx context.Context, filter repository.Notificat
 		args = append(args, *filter.Priority)
 		argIdx++
 	}
+	if filter.Cursor != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at < $%d", argIdx))
+		args = append(args, *filter.Cursor)
+		argIdx++
+	}
 
 	where := ""
 	if len(conditions) > 0 {
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Count query
-	countQuery := "SELECT COUNT(*) FROM notifications" + where
+	// Count query — use estimated count for unfiltered queries to avoid full table scan
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count notifications: %w", err)
+	if len(conditions) == 0 {
+		err := r.pool.QueryRow(ctx,
+			"SELECT GREATEST(reltuples::int, 0) FROM pg_class WHERE relname = 'notifications'",
+		).Scan(&total)
+		if err != nil {
+			// Fallback to exact count
+			if err2 := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM notifications").Scan(&total); err2 != nil {
+				return nil, 0, fmt.Errorf("count notifications: %w", err2)
+			}
+		}
+	} else {
+		// Build count conditions without cursor (cursor is for pagination, not filtering)
+		var countConditions []string
+		var countArgs []interface{}
+		countArgIdx := 1
+		if filter.Channel != nil {
+			countConditions = append(countConditions, fmt.Sprintf("channel = $%d", countArgIdx))
+			countArgs = append(countArgs, *filter.Channel)
+			countArgIdx++
+		}
+		if filter.Status != nil {
+			countConditions = append(countConditions, fmt.Sprintf("status = $%d", countArgIdx))
+			countArgs = append(countArgs, *filter.Status)
+			countArgIdx++
+		}
+		if filter.Priority != nil {
+			countConditions = append(countConditions, fmt.Sprintf("priority = $%d", countArgIdx))
+			countArgs = append(countArgs, *filter.Priority)
+			countArgIdx++
+		}
+		countWhere := ""
+		if len(countConditions) > 0 {
+			countWhere = " WHERE " + strings.Join(countConditions, " AND ")
+		}
+		countQuery := "SELECT COUNT(*) FROM notifications" + countWhere
+		if err := r.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count notifications: %w", err)
+		}
 	}
 
 	// Data query
@@ -161,13 +201,24 @@ func (r *NotificationRepo) List(ctx context.Context, filter repository.Notificat
 	if limit <= 0 {
 		limit = 20
 	}
-	offset := filter.Offset
 
-	query := fmt.Sprintf(`SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
-		template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
-		last_error, sent_at, created_at, updated_at
-		FROM notifications%s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
-	args = append(args, limit, offset)
+	var query string
+	if filter.Cursor != nil {
+		// Keyset pagination — no OFFSET needed
+		query = fmt.Sprintf(`SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
+			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
+			last_error, sent_at, created_at, updated_at
+			FROM notifications%s ORDER BY created_at DESC LIMIT $%d`, where, argIdx)
+		args = append(args, limit)
+	} else {
+		// Traditional OFFSET pagination
+		offset := filter.Offset
+		query = fmt.Sprintf(`SELECT id, batch_id, idempotency_key, recipient, channel, content, priority, status,
+			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
+			last_error, sent_at, created_at, updated_at
+			FROM notifications%s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		args = append(args, limit, offset)
+	}
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -183,7 +234,7 @@ func (r *NotificationRepo) List(ctx context.Context, filter repository.Notificat
 }
 
 func (r *NotificationRepo) GetPendingScheduled(ctx context.Context) ([]*domain.Notification, error) {
-	rows, err := r.pool.Query(ctx, selectPendingScheduled)
+	rows, err := r.pool.Query(ctx, selectPendingScheduled, 500)
 	if err != nil {
 		return nil, fmt.Errorf("query pending scheduled: %w", err)
 	}
@@ -192,12 +243,42 @@ func (r *NotificationRepo) GetPendingScheduled(ctx context.Context) ([]*domain.N
 }
 
 func (r *NotificationRepo) GetPendingForRecovery(ctx context.Context) ([]*domain.Notification, error) {
-	rows, err := r.pool.Query(ctx, selectPendingForRecovery)
+	rows, err := r.pool.Query(ctx, selectPendingForRecovery, 500)
 	if err != nil {
 		return nil, fmt.Errorf("query pending for recovery: %w", err)
 	}
 	defer rows.Close()
 	return scanNotifications(rows)
+}
+
+func (r *NotificationRepo) GetAndMarkProcessing(ctx context.Context, id uuid.UUID) (*domain.Notification, error) {
+	n := &domain.Notification{}
+	var varsJSON []byte
+
+	err := r.pool.QueryRow(ctx, getAndMarkProcessing, id).Scan(
+		&n.ID, &n.BatchID, &n.IdempotencyKey, &n.Recipient, &n.Channel, &n.Content,
+		&n.Priority, &n.Status, &n.TemplateID, &varsJSON, &n.ScheduledAt,
+		&n.ProviderMsgID, &n.Attempts, &n.MaxAttempts, &n.LastError, &n.SentAt,
+		&n.CreatedAt, &n.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get and mark processing: %w", err)
+	}
+
+	if varsJSON != nil {
+		if err := json.Unmarshal(varsJSON, &n.TemplateVars); err != nil {
+			return nil, fmt.Errorf("unmarshal template vars: %w", err)
+		}
+	}
+	return n, nil
+}
+
+func (r *NotificationRepo) UpdateBatchStatus(ctx context.Context, ids []uuid.UUID, status domain.Status) error {
+	_, err := r.pool.Exec(ctx, updateBatchStatus, ids, status)
+	return err
 }
 
 func scanNotifications(rows pgx.Rows) ([]*domain.Notification, error) {

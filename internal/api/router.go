@@ -45,6 +45,8 @@ func NewRouter(
 
 	// Apply middleware
 	var h http.Handler = mux
+	h = middleware.Gzip(h)
+	h = middleware.MaxBodySize(5 << 20)(h) // 5MB limit
 	h = middleware.Logging(logger)(h)
 	h = middleware.Recovery(logger)(h)
 	h = middleware.RequestID(h)

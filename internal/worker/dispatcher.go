@@ -12,13 +12,14 @@ import (
 )
 
 type Dispatcher struct {
-	consumer    queue.Consumer
-	rateLimiter *qredis.RateLimiter
-	processor   *Processor
-	pools       map[domain.Channel]*Pool
-	metrics     *observability.MetricsCollector
-	logger      *slog.Logger
+	consumer     queue.Consumer
+	rateLimiter  *qredis.RateLimiter
+	processor    *Processor
+	pools        map[domain.Channel]*Pool
+	metrics      *observability.MetricsCollector
+	logger       *slog.Logger
 	pollInterval time.Duration
+	batchSize    int
 }
 
 func NewDispatcher(
@@ -29,11 +30,16 @@ func NewDispatcher(
 	metrics *observability.MetricsCollector,
 	logger *slog.Logger,
 	pollInterval time.Duration,
+	batchSize int,
 ) *Dispatcher {
 	pools := map[domain.Channel]*Pool{
 		domain.ChannelSMS:   NewPool(poolSize),
 		domain.ChannelEmail: NewPool(poolSize),
 		domain.ChannelPush:  NewPool(poolSize),
+	}
+
+	if batchSize <= 0 {
+		batchSize = 10
 	}
 
 	return &Dispatcher{
@@ -44,6 +50,7 @@ func NewDispatcher(
 		metrics:      metrics,
 		logger:       logger,
 		pollInterval: pollInterval,
+		batchSize:    batchSize,
 	}
 }
 
@@ -83,21 +90,23 @@ func (d *Dispatcher) dispatch(ctx context.Context, channel domain.Channel) {
 		return
 	}
 
-	msg, err := d.consumer.Dequeue(ctx, string(channel))
+	msgs, err := d.consumer.DequeueBatch(ctx, string(channel), d.batchSize)
 	if err != nil {
-		d.logger.Error("dequeue failed", "error", err, "channel", channel)
+		d.logger.Error("dequeue batch failed", "error", err, "channel", channel)
 		return
 	}
-	if msg == nil {
+	if len(msgs) == 0 {
 		return
 	}
-
-	d.metrics.IncrProcessing(channel)
 
 	pool := d.pools[channel]
-	pool.Submit(func() {
-		d.processor.Process(ctx, *msg)
-	})
+	for _, msg := range msgs {
+		d.metrics.IncrProcessing(channel)
+		m := msg // capture loop variable
+		pool.Submit(func() {
+			d.processor.Process(ctx, m)
+		})
+	}
 }
 
 func (d *Dispatcher) Stop() {
@@ -118,9 +127,14 @@ func NewSingleChannelDispatcher(
 	metrics *observability.MetricsCollector,
 	logger *slog.Logger,
 	pollInterval time.Duration,
+	batchSize int,
 ) *Dispatcher {
 	pools := map[domain.Channel]*Pool{
 		channel: NewPool(poolSize),
+	}
+
+	if batchSize <= 0 {
+		batchSize = 10
 	}
 
 	return &Dispatcher{
@@ -131,6 +145,7 @@ func NewSingleChannelDispatcher(
 		metrics:      metrics,
 		logger:       logger,
 		pollInterval: pollInterval,
+		batchSize:    batchSize,
 	}
 }
 
