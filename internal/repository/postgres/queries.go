@@ -82,7 +82,4 @@ const (
 			template_id, template_vars, scheduled_at, provider_msg_id, attempts, max_attempts,
 			last_error, sent_at, created_at, updated_at`
 
-	insertDeadLetter = `
-		INSERT INTO dead_letters (id, notification_id, last_error, attempts, failed_at)
-		VALUES ($1, $2, $3, $4, $5)`
 )

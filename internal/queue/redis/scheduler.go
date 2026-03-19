@@ -52,7 +52,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 func (s *Scheduler) poll(ctx context.Context) {
 	// Acquire distributed lock so only one scheduler instance processes at a time
-	acquired, err := s.redis.SetNX(ctx, schedulerLockKey, "1", schedulerLockTTL).Result()
+	acquired, err := s.redis.SetNX(ctx, schedulerLockKey, "1", schedulerLockTTL).Result() //nolint:staticcheck // SetNX is clearer for lock semantics
 	if err != nil {
 		s.logger.Error("scheduler lock acquisition failed", "error", err)
 		return

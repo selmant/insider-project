@@ -14,7 +14,7 @@ import (
 func TestGzip_CompressesWhenAccepted(t *testing.T) {
 	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -35,7 +35,7 @@ func TestGzip_CompressesWhenAccepted(t *testing.T) {
 
 func TestGzip_NoCompressionWithoutAcceptHeader(t *testing.T) {
 	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("plain response"))
+		_, _ = w.Write([]byte("plain response"))
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -49,7 +49,7 @@ func TestGzip_NoCompressionWithoutAcceptHeader(t *testing.T) {
 
 func TestGzip_HandlesDeflateOnly(t *testing.T) {
 	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("response"))
+		_, _ = w.Write([]byte("response"))
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -64,7 +64,7 @@ func TestGzip_HandlesDeflateOnly(t *testing.T) {
 
 func TestGzip_SetsContentEncodingHeader(t *testing.T) {
 	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("test"))
+		_, _ = w.Write([]byte("test"))
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)

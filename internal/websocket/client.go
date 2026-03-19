@@ -41,7 +41,7 @@ func NewClient(conn *websocket.Conn, hub *Hub, ctx context.Context) *Client {
 func (c *Client) ReadPump() {
 	defer func() {
 		c.hub.Unregister(c)
-		c.conn.CloseNow()
+		_ = c.conn.CloseNow()
 	}()
 
 	for {
@@ -67,7 +67,7 @@ func (c *Client) ReadPump() {
 }
 
 func (c *Client) WritePump() {
-	defer c.conn.CloseNow()
+	defer func() { _ = c.conn.CloseNow() }()
 
 	for {
 		select {

@@ -184,7 +184,6 @@ func (r *NotificationRepo) List(ctx context.Context, filter repository.Notificat
 		if filter.Priority != nil {
 			countConditions = append(countConditions, fmt.Sprintf("priority = $%d", countArgIdx))
 			countArgs = append(countArgs, *filter.Priority)
-			countArgIdx++
 		}
 		countWhere := ""
 		if len(countConditions) > 0 {

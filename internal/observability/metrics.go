@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/insider/insider/internal/domain"
@@ -19,7 +18,6 @@ type MetricsSnapshot struct {
 }
 
 type MetricsCollector struct {
-	mu       sync.RWMutex
 	channels map[domain.Channel]*ChannelMetrics
 	connFunc func() int // returns current WebSocket connection count
 }

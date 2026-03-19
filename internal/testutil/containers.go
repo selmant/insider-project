@@ -73,7 +73,7 @@ func (pc *PostgresContainer) Cleanup(ctx context.Context) {
 		pc.Pool.Close()
 	}
 	if pc.Container != nil {
-		pc.Container.Terminate(ctx)
+		_ = pc.Container.Terminate(ctx)
 	}
 }
 
@@ -128,7 +128,7 @@ func (rc *RedisContainer) Cleanup(ctx context.Context) {
 		rc.Client.Close()
 	}
 	if rc.Container != nil {
-		rc.Container.Terminate(ctx)
+		_ = rc.Container.Terminate(ctx)
 	}
 }
 

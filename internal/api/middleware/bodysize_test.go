@@ -15,7 +15,7 @@ func TestMaxBodySize_AllowsSmallBody(t *testing.T) {
 	handler := MaxBodySize(1024)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 
 	body := strings.NewReader("hello")

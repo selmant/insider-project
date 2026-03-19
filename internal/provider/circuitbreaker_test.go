@@ -64,7 +64,7 @@ func TestCircuitBreaker_HalfOpenAfterTimeout(t *testing.T) {
 
 	// Open the circuit
 	for i := 0; i < 2; i++ {
-		cb.Send(context.Background(), &domain.Notification{})
+		_, _ = cb.Send(context.Background(), &domain.Notification{})
 	}
 	if cb.State() != StateOpen {
 		t.Fatal("expected open state")
