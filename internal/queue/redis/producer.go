@@ -12,6 +12,7 @@ import (
 )
 
 const queuePrefix = "queue:"
+const retryDelayedKey = "retry:delayed"
 
 type Producer struct {
 	client *redis.Client
@@ -62,6 +63,20 @@ func (p *Producer) EnqueueBatch(ctx context.Context, msgs []queue.Message) error
 		return fmt.Errorf("pipeline enqueue: %w", err)
 	}
 	return nil
+}
+
+func (p *Producer) EnqueueDelayed(ctx context.Context, msg queue.Message, delay time.Duration) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	executeAt := float64(time.Now().Add(delay).UnixNano())
+
+	return p.client.ZAdd(ctx, retryDelayedKey, redis.Z{
+		Score:  executeAt,
+		Member: string(data),
+	}).Err()
 }
 
 // calculateScore produces a score for priority ordering.

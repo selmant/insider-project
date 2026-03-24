@@ -1,10 +1,14 @@
 package queue
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Producer interface {
 	Enqueue(ctx context.Context, msg Message) error
 	EnqueueBatch(ctx context.Context, msgs []Message) error
+	EnqueueDelayed(ctx context.Context, msg Message, delay time.Duration) error
 }
 
 type Consumer interface {

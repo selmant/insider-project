@@ -18,18 +18,20 @@ import (
 )
 
 type Processor struct {
-	repo      repository.NotificationRepository
-	provider  provider.Provider
-	retrier   *retry.Strategy
+	repo       repository.NotificationRepository
+	provider   provider.Provider
+	producer   queue.Producer
+	retrier    *retry.Strategy
 	deadLetter *retry.DeadLetterHandler
-	hub       *ws.Hub
-	metrics   *observability.MetricsCollector
-	logger    *slog.Logger
+	hub        *ws.Hub
+	metrics    *observability.MetricsCollector
+	logger     *slog.Logger
 }
 
 func NewProcessor(
 	repo repository.NotificationRepository,
 	prov provider.Provider,
+	producer queue.Producer,
 	retrier *retry.Strategy,
 	deadLetter *retry.DeadLetterHandler,
 	hub *ws.Hub,
@@ -39,6 +41,7 @@ func NewProcessor(
 	return &Processor{
 		repo:       repo,
 		provider:   prov,
+		producer:   producer,
 		retrier:    retrier,
 		deadLetter: deadLetter,
 		hub:        hub,
@@ -184,7 +187,11 @@ func (p *Processor) handleFailure(ctx context.Context, n *domain.Notification, m
 	}
 
 	delay := p.retrier.NextDelay(n.Attempts)
-	p.logger.Info("scheduling retry", "id", n.ID, "attempt", n.Attempts, "delay", delay)
+	if err := p.producer.EnqueueDelayed(ctx, msg, delay); err != nil {
+		p.logger.Error("retry enqueue failed", "error", err, "id", n.ID)
+		return
+	}
+	p.logger.Info("scheduled retry", "id", n.ID, "attempt", n.Attempts, "delay", delay)
 
 	p.hub.Broadcast(ws.Event{
 		Type:           "notification.retrying",

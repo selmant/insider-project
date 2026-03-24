@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -66,11 +68,11 @@ func (s *Scheduler) poll(ctx context.Context) {
 		notifications, err := s.repo.GetPendingScheduled(ctx)
 		if err != nil {
 			s.logger.Error("scheduler poll failed", "error", err)
-			return
+			break
 		}
 
 		if len(notifications) == 0 {
-			return
+			break
 		}
 
 		for _, n := range notifications {
@@ -89,5 +91,35 @@ func (s *Scheduler) poll(ctx context.Context) {
 				s.logger.Error("scheduler status update failed", "error", err, "id", n.ID)
 			}
 		}
+	}
+
+	s.promoteDelayedRetries(ctx)
+}
+
+func (s *Scheduler) promoteDelayedRetries(ctx context.Context) {
+	now := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	results, err := s.redis.ZRangeByScore(ctx, retryDelayedKey, &goredis.ZRangeBy{
+		Min: "-inf",
+		Max: now,
+	}).Result()
+	if err != nil {
+		s.logger.Error("poll delayed retries failed", "error", err)
+		return
+	}
+
+	for _, member := range results {
+		var msg queue.Message
+		if err := json.Unmarshal([]byte(member), &msg); err != nil {
+			s.logger.Error("unmarshal delayed retry", "error", err)
+			continue
+		}
+
+		if err := s.producer.Enqueue(ctx, msg); err != nil {
+			s.logger.Error("promote delayed retry failed", "error", err, "id", msg.NotificationID)
+			continue
+		}
+
+		s.redis.ZRem(ctx, retryDelayedKey, member)
 	}
 }

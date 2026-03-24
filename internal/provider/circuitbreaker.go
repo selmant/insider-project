@@ -18,7 +18,7 @@ const (
 
 type CircuitBreaker struct {
 	provider    Provider
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	state       CBState
 	failures    int
 	maxFailures int
@@ -36,24 +36,25 @@ func NewCircuitBreaker(provider Provider, maxFailures int, timeout time.Duration
 }
 
 func (cb *CircuitBreaker) Send(ctx context.Context, n *domain.Notification) (string, error) {
-	cb.mu.Lock()
+	cb.mu.RLock()
+	state := cb.state
+	lastFailure := cb.lastFailure
+	cb.mu.RUnlock()
 
-	switch cb.state {
+	switch state {
 	case StateOpen:
-		if time.Since(cb.lastFailure) > cb.timeout {
-			cb.state = StateHalfOpen
-			cb.mu.Unlock()
-			return cb.doSend(ctx, n)
+		if time.Since(lastFailure) <= cb.timeout {
+			return "", domain.ErrCircuitOpen
 		}
-		cb.mu.Unlock()
-		return "", domain.ErrCircuitOpen
-
-	case StateHalfOpen:
+		// Timeout elapsed — attempt transition to HalfOpen under write lock.
+		cb.mu.Lock()
+		if cb.state == StateOpen {
+			cb.state = StateHalfOpen
+		}
 		cb.mu.Unlock()
 		return cb.doSend(ctx, n)
 
-	default: // Closed
-		cb.mu.Unlock()
+	default: // Closed or HalfOpen
 		return cb.doSend(ctx, n)
 	}
 }
@@ -89,7 +90,7 @@ func (cb *CircuitBreaker) recordSuccess() {
 }
 
 func (cb *CircuitBreaker) State() CBState {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
 	return cb.state
 }

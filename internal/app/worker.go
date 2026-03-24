@@ -45,7 +45,7 @@ func RunWorker(ctx context.Context, infra *Infra, channel domain.Channel, logger
 	deadLetter := retry.NewDeadLetterHandler(infra.DB)
 
 	// Processor
-	processor := worker.NewProcessor(notifRepo, prov, retrier, deadLetter, hub, metrics, logger)
+	processor := worker.NewProcessor(notifRepo, prov, producer, retrier, deadLetter, hub, metrics, logger)
 
 	// Single-channel dispatcher
 	dispatcher := worker.NewSingleChannelDispatcher(

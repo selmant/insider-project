@@ -4,10 +4,12 @@ package redis_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -346,6 +348,58 @@ func TestProducer_EnqueueBatch_MultiChannel(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, got, 1, "channel %s", ch)
 	}
+}
+
+func TestProducer_EnqueueDelayed(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client)
+
+	msg := queue.Message{
+		NotificationID: uuid.New(),
+		Channel:        domain.ChannelSMS,
+		Priority:       domain.PriorityNormal,
+	}
+
+	err := producer.EnqueueDelayed(ctx, msg, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should NOT appear in the main queue
+	got, err := consumer.Dequeue(ctx, string(domain.ChannelSMS))
+	require.NoError(t, err)
+	assert.Nil(t, got, "delayed message should not be in the main queue yet")
+
+	// Should be in the retry:delayed sorted set
+	count, err := redisContainer.Client.ZCard(ctx, "retry:delayed").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestProducer_EnqueueDelayed_ReadyAfterDelay(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	producer := qredis.NewProducer(redisContainer.Client)
+
+	msg := queue.Message{
+		NotificationID: uuid.New(),
+		Channel:        domain.ChannelEmail,
+		Priority:       domain.PriorityHigh,
+	}
+
+	// Enqueue with a tiny delay so it's immediately ready
+	err := producer.EnqueueDelayed(ctx, msg, 0)
+	require.NoError(t, err)
+
+	// The item should have a score <= now, meaning it's ready for promotion
+	results, err := redisContainer.Client.ZRangeByScore(ctx, "retry:delayed", &goredis.ZRangeBy{
+		Min: "-inf",
+		Max: fmt.Sprintf("%d", time.Now().Add(time.Second).UnixNano()),
+	}).Result()
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
 }
 
 func TestProducer_EnqueueBatch_Empty(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"github.com/insider/insider/internal/domain"
 	"github.com/insider/insider/internal/observability"
 	"github.com/insider/insider/internal/queue"
+	qredis "github.com/insider/insider/internal/queue/redis"
 	"github.com/insider/insider/internal/repository/postgres"
 	"github.com/insider/insider/internal/retry"
 	"github.com/insider/insider/internal/testutil"
@@ -94,8 +95,9 @@ func setupProcessor(prov *testProvider) (*worker.Processor, *websocket.Hub, *obs
 	retrier := retry.NewStrategy(10*time.Millisecond, 100*time.Millisecond)
 	deadLetter := retry.NewDeadLetterHandler(pgContainer.Pool)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
+	producer := qredis.NewProducer(redisContainer.Client)
 
-	proc := worker.NewProcessor(repo, prov, retrier, deadLetter, hub, metrics, logger)
+	proc := worker.NewProcessor(repo, prov, producer, retrier, deadLetter, hub, metrics, logger)
 	return proc, hub, metrics
 }
 
@@ -205,6 +207,37 @@ func TestProcessor_MaxRetriesExhausted(t *testing.T) {
 	assert.Equal(t, 1, dlCount)
 }
 
+func TestProcessor_FailureEnqueuesDelayedRetry(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, pgContainer.TruncateTables(ctx))
+	require.NoError(t, redisContainer.FlushAll(ctx))
+
+	prov := &testProvider{err: errors.New("temporary failure")}
+	proc, _, _ := setupProcessor(prov)
+	repo := postgres.NewNotificationRepo(pgContainer.Pool)
+
+	n := newTestNotification(domain.ChannelSMS, domain.StatusQueued)
+	require.NoError(t, repo.Create(ctx, n))
+
+	msg := queue.Message{
+		NotificationID: n.ID,
+		Channel:        n.Channel,
+		Priority:       n.Priority,
+	}
+	proc.Process(ctx, msg)
+
+	// Notification should be back to queued with attempts=1
+	got, err := repo.GetByID(ctx, n.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusQueued, got.Status)
+	assert.Equal(t, 1, got.Attempts)
+
+	// A retry message should be in the delayed set
+	count, err := redisContainer.Client.ZCard(ctx, "retry:delayed").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "failed notification should be in retry:delayed set")
+}
+
 func TestProcessor_CancelledSkipped(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, pgContainer.TruncateTables(ctx))
@@ -248,7 +281,8 @@ func TestProcessor_MultipleRetriesThenSuccess(t *testing.T) {
 	retrier := retry.NewStrategy(10*time.Millisecond, 100*time.Millisecond)
 	deadLetter := retry.NewDeadLetterHandler(pgContainer.Pool)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
-	proc := worker.NewProcessor(repo, prov, retrier, deadLetter, hub, metrics, logger)
+	producer := qredis.NewProducer(redisContainer.Client)
+	proc := worker.NewProcessor(repo, prov, producer, retrier, deadLetter, hub, metrics, logger)
 
 	n := newTestNotification(domain.ChannelSMS, domain.StatusQueued)
 	require.NoError(t, repo.Create(ctx, n))

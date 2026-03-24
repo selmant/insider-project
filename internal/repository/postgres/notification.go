@@ -160,8 +160,7 @@ func (r *NotificationRepo) List(ctx context.Context, filter repository.Notificat
 		err := r.pool.QueryRow(ctx,
 			"SELECT GREATEST(reltuples::int, 0) FROM pg_class WHERE relname = 'notifications'",
 		).Scan(&total)
-		if err != nil {
-			// Fallback to exact count
+		if err != nil || total == 0 {
 			if err2 := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM notifications").Scan(&total); err2 != nil {
 				return nil, 0, fmt.Errorf("count notifications: %w", err2)
 			}
