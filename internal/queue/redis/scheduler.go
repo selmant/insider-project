@@ -94,14 +94,55 @@ func (s *Scheduler) poll(ctx context.Context) {
 	}
 
 	s.promoteDelayedRetries(ctx)
+	s.reclaimExpiredProcessing(ctx)
+}
+
+// reclaimExpiredProcessing moves messages that exceeded their visibility timeout
+// back to the main queue. This replaces the startup-only recovery sweep with
+// continuous crash recovery.
+func (s *Scheduler) reclaimExpiredProcessing(ctx context.Context) {
+	now := fmt.Sprintf("%d", time.Now().UnixNano())
+	channels := []domain.Channel{domain.ChannelSMS, domain.ChannelEmail, domain.ChannelPush}
+
+	for _, ch := range channels {
+		procKey := processingPrefix + string(ch)
+		results, err := s.redis.ZRangeArgs(ctx, goredis.ZRangeArgs{
+			Key:     procKey,
+			Start:   "-inf",
+			Stop:    now,
+			ByScore: true,
+		}).Result()
+		if err != nil {
+			s.logger.Error("reclaim expired processing failed", "error", err, "channel", ch)
+			continue
+		}
+
+		for _, member := range results {
+			var msg queue.Message
+			if err := json.Unmarshal([]byte(member), &msg); err != nil {
+				s.logger.Error("unmarshal processing message", "error", err)
+				continue
+			}
+
+			if err := s.producer.Enqueue(ctx, msg); err != nil {
+				s.logger.Error("reclaim enqueue failed", "error", err, "id", msg.NotificationID)
+				continue
+			}
+
+			s.redis.ZRem(ctx, procKey, member)
+			s.logger.Info("reclaimed expired message", "id", msg.NotificationID, "channel", ch)
+		}
+	}
 }
 
 func (s *Scheduler) promoteDelayedRetries(ctx context.Context) {
 	now := fmt.Sprintf("%d", time.Now().UnixNano())
 
-	results, err := s.redis.ZRangeByScore(ctx, retryDelayedKey, &goredis.ZRangeBy{
-		Min: "-inf",
-		Max: now,
+	results, err := s.redis.ZRangeArgs(ctx, goredis.ZRangeArgs{
+		Key:     retryDelayedKey,
+		Start:   "-inf",
+		Stop:    now,
+		ByScore: true,
 	}).Result()
 	if err != nil {
 		s.logger.Error("poll delayed retries failed", "error", err)

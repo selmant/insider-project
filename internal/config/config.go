@@ -52,13 +52,14 @@ type RedisConfig struct {
 }
 
 type WorkerConfig struct {
-	PoolSize      int           `env:"WORKER_POOL_SIZE" envDefault:"10"`
-	RateLimit     int           `env:"WORKER_RATE_LIMIT" envDefault:"100"`
-	PollInterval  time.Duration `env:"WORKER_POLL_INTERVAL" envDefault:"100ms"`
-	BatchSize     int           `env:"WORKER_BATCH_SIZE" envDefault:"10"`
-	RetryBaseWait time.Duration `env:"WORKER_RETRY_BASE_WAIT" envDefault:"1s"`
-	RetryMaxWait  time.Duration `env:"WORKER_RETRY_MAX_WAIT" envDefault:"5m"`
-	MaxAttempts   int           `env:"WORKER_MAX_ATTEMPTS" envDefault:"5"`
+	PoolSize          int           `env:"WORKER_POOL_SIZE" envDefault:"10"`
+	RateLimit         int           `env:"WORKER_RATE_LIMIT" envDefault:"100"`
+	PollInterval      time.Duration `env:"WORKER_POLL_INTERVAL" envDefault:"100ms"`
+	BatchSize         int           `env:"WORKER_BATCH_SIZE" envDefault:"10"`
+	RetryBaseWait     time.Duration `env:"WORKER_RETRY_BASE_WAIT" envDefault:"1s"`
+	RetryMaxWait      time.Duration `env:"WORKER_RETRY_MAX_WAIT" envDefault:"5m"`
+	MaxAttempts       int           `env:"WORKER_MAX_ATTEMPTS" envDefault:"5"`
+	VisibilityTimeout time.Duration `env:"WORKER_VISIBILITY_TIMEOUT" envDefault:"30s"`
 }
 
 type ProviderConfig struct {

@@ -96,8 +96,9 @@ func setupProcessor(prov *testProvider) (*worker.Processor, *websocket.Hub, *obs
 	deadLetter := retry.NewDeadLetterHandler(pgContainer.Pool)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
-	proc := worker.NewProcessor(repo, prov, producer, retrier, deadLetter, hub, metrics, logger)
+	proc := worker.NewProcessor(repo, prov, producer, consumer, retrier, deadLetter, hub, metrics, logger)
 	return proc, hub, metrics
 }
 
@@ -282,7 +283,8 @@ func TestProcessor_MultipleRetriesThenSuccess(t *testing.T) {
 	deadLetter := retry.NewDeadLetterHandler(pgContainer.Pool)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	proc := worker.NewProcessor(repo, prov, producer, retrier, deadLetter, hub, metrics, logger)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
+	proc := worker.NewProcessor(repo, prov, producer, consumer, retrier, deadLetter, hub, metrics, logger)
 
 	n := newTestNotification(domain.ChannelSMS, domain.StatusQueued)
 	require.NoError(t, repo.Create(ctx, n))

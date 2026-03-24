@@ -37,7 +37,7 @@ func TestProducerConsumer_EnqueueDequeue(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	msg := queue.Message{
 		NotificationID: uuid.New(),
@@ -60,7 +60,7 @@ func TestConsumer_EmptyQueue(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	got, err := consumer.Dequeue(ctx, string(domain.ChannelSMS))
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestProducerConsumer_PriorityOrdering(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	lowID := uuid.New()
 	normalID := uuid.New()
@@ -116,7 +116,7 @@ func TestProducerConsumer_ChannelIsolation(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	smsID := uuid.New()
 	emailID := uuid.New()
@@ -222,7 +222,7 @@ func TestConsumer_DequeueBatch(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Enqueue 5 messages
 	ids := make([]uuid.UUID, 5)
@@ -256,7 +256,7 @@ func TestConsumer_DequeueBatch_EmptyQueue(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	msgs, err := consumer.DequeueBatch(ctx, string(domain.ChannelSMS), 10)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestConsumer_DequeueBatch_PriorityOrdering(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	lowID := uuid.New()
 	normalID := uuid.New()
@@ -306,7 +306,7 @@ func TestProducer_EnqueueBatch(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	msgs := []queue.Message{
 		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityNormal},
@@ -331,7 +331,7 @@ func TestProducer_EnqueueBatch_MultiChannel(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	msgs := []queue.Message{
 		{NotificationID: uuid.New(), Channel: domain.ChannelSMS, Priority: domain.PriorityNormal},
@@ -355,7 +355,7 @@ func TestProducer_EnqueueDelayed(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	msg := queue.Message{
 		NotificationID: uuid.New(),

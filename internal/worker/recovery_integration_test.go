@@ -5,6 +5,7 @@ package worker_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,7 +43,7 @@ func TestRecovery_ReenqueuesPendingAndQueued(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create stuck notifications
 	n1 := newTestNotification(domain.ChannelSMS, domain.StatusPending)
@@ -76,7 +77,7 @@ func TestRecovery_SkipsTerminalStatuses(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create terminal notifications
 	n1 := newTestNotification(domain.ChannelEmail, domain.StatusSent)
@@ -103,7 +104,7 @@ func TestRecovery_FiltersbyChannel(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create stuck notifications across channels
 	n1 := newTestNotification(domain.ChannelSMS, domain.StatusPending)

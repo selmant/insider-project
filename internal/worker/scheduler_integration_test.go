@@ -25,7 +25,7 @@ func TestScheduler_EnqueuesDueNotifications(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create a scheduled notification due in the past
 	past := time.Now().Add(-1 * time.Minute).Truncate(time.Microsecond)
@@ -58,7 +58,7 @@ func TestScheduler_IgnoresFutureNotifications(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create a scheduled notification in the future
 	future := time.Now().Add(1 * time.Hour).Truncate(time.Microsecond)
@@ -89,7 +89,7 @@ func TestScheduler_PromotesDelayedRetries(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 
 	// Put a message into the delayed retry set with zero delay (immediately ready)
@@ -129,7 +129,7 @@ func TestScheduler_SkipsNotYetReadyDelayed(t *testing.T) {
 	require.NoError(t, redisContainer.FlushAll(ctx))
 
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 
 	// Put a message with a long delay (not ready yet)
@@ -164,7 +164,7 @@ func TestScheduler_IgnoresNonScheduled(t *testing.T) {
 
 	repo := postgres.NewNotificationRepo(pgContainer.Pool)
 	producer := qredis.NewProducer(redisContainer.Client)
-	consumer := qredis.NewConsumer(redisContainer.Client)
+	consumer := qredis.NewConsumer(redisContainer.Client, 30*time.Second)
 
 	// Create pending and sent notifications (not scheduled)
 	n1 := newTestNotification(domain.ChannelPush, domain.StatusPending)

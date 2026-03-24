@@ -14,4 +14,5 @@ type Producer interface {
 type Consumer interface {
 	Dequeue(ctx context.Context, channel string) (*Message, error)
 	DequeueBatch(ctx context.Context, channel string, count int) ([]Message, error)
+	Ack(ctx context.Context, channel string, msgs ...Message) error
 }

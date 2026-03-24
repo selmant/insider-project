@@ -23,7 +23,7 @@ func RunWorker(ctx context.Context, infra *Infra, channel domain.Channel, logger
 
 	// Queue
 	producer := qredis.NewProducer(infra.Redis)
-	consumer := qredis.NewConsumer(infra.Redis)
+	consumer := qredis.NewConsumer(infra.Redis, cfg.Worker.VisibilityTimeout)
 	rateLimiter := qredis.NewRateLimiter(infra.Redis, cfg.Worker.RateLimit)
 
 	// WebSocket hub (for broadcasting status updates)
@@ -45,7 +45,7 @@ func RunWorker(ctx context.Context, infra *Infra, channel domain.Channel, logger
 	deadLetter := retry.NewDeadLetterHandler(infra.DB)
 
 	// Processor
-	processor := worker.NewProcessor(notifRepo, prov, producer, retrier, deadLetter, hub, metrics, logger)
+	processor := worker.NewProcessor(notifRepo, prov, producer, consumer, retrier, deadLetter, hub, metrics, logger)
 
 	// Single-channel dispatcher
 	dispatcher := worker.NewSingleChannelDispatcher(
@@ -56,30 +56,6 @@ func RunWorker(ctx context.Context, infra *Infra, channel domain.Channel, logger
 
 	// Scheduler (each worker picks up scheduled notifications for its channel)
 	scheduler := qredis.NewScheduler(notifRepo, producer, infra.Redis, logger)
-
-	// Recovery sweep for this channel
-	go func() {
-		notifications, err := notifRepo.GetPendingForRecovery(ctx)
-		if err != nil {
-			logger.Error("recovery sweep failed", "error", err)
-			return
-		}
-		count := 0
-		for _, n := range notifications {
-			if n.Channel != channel {
-				continue
-			}
-			msg := qredis.MessageFromNotification(n)
-			if err := producer.Enqueue(ctx, msg); err != nil {
-				logger.Error("recovery enqueue failed", "error", err, "id", n.ID)
-				continue
-			}
-			count++
-		}
-		if count > 0 {
-			logger.Info("recovery sweep completed", "channel", channel, "count", count)
-		}
-	}()
 
 	// Start
 	dispatcher.Start(ctx)

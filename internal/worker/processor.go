@@ -21,6 +21,7 @@ type Processor struct {
 	repo       repository.NotificationRepository
 	provider   provider.Provider
 	producer   queue.Producer
+	consumer   queue.Consumer
 	retrier    *retry.Strategy
 	deadLetter *retry.DeadLetterHandler
 	hub        *ws.Hub
@@ -32,6 +33,7 @@ func NewProcessor(
 	repo repository.NotificationRepository,
 	prov provider.Provider,
 	producer queue.Producer,
+	consumer queue.Consumer,
 	retrier *retry.Strategy,
 	deadLetter *retry.DeadLetterHandler,
 	hub *ws.Hub,
@@ -42,6 +44,7 @@ func NewProcessor(
 		repo:       repo,
 		provider:   prov,
 		producer:   producer,
+		consumer:   consumer,
 		retrier:    retrier,
 		deadLetter: deadLetter,
 		hub:        hub,
@@ -54,7 +57,7 @@ func (p *Processor) Process(ctx context.Context, msg queue.Message) {
 	n, err := p.repo.GetAndMarkProcessing(ctx, msg.NotificationID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			// Already processed, cancelled, or doesn't exist — skip silently
+			p.ack(ctx, msg)
 			return
 		}
 		p.logger.Error("get and mark notification for processing", "error", err, "id", msg.NotificationID)
@@ -74,6 +77,7 @@ func (p *Processor) Process(ctx context.Context, msg queue.Message) {
 		return
 	}
 
+	p.ack(ctx, msg)
 	p.metrics.IncrSent(n.Channel)
 	p.hub.Broadcast(ws.Event{
 		Type:           "notification.sent",
@@ -142,6 +146,11 @@ func (p *Processor) ProcessBatch(ctx context.Context, msgs []queue.Message) {
 		}
 	}
 
+	// Ack all processed messages (sent + failed are both handled)
+	if len(msgs) > 0 {
+		p.ack(ctx, msgs...)
+	}
+
 	// Batch broadcast sent events
 	if len(sentEvents) > 0 {
 		p.hub.BroadcastBatch(sentEvents)
@@ -170,6 +179,7 @@ func (p *Processor) handleFailure(ctx context.Context, n *domain.Notification, m
 			p.logger.Error("dead letter", "error", err, "id", n.ID)
 		}
 
+		p.ack(ctx, msg)
 		p.hub.Broadcast(ws.Event{
 			Type:           "notification.failed",
 			NotificationID: n.ID.String(),
@@ -191,6 +201,7 @@ func (p *Processor) handleFailure(ctx context.Context, n *domain.Notification, m
 		p.logger.Error("retry enqueue failed", "error", err, "id", n.ID)
 		return
 	}
+	p.ack(ctx, msg)
 	p.logger.Info("scheduled retry", "id", n.ID, "attempt", n.Attempts, "delay", delay)
 
 	p.hub.Broadcast(ws.Event{
@@ -200,4 +211,14 @@ func (p *Processor) handleFailure(ctx context.Context, n *domain.Notification, m
 		Status:         string(domain.StatusQueued),
 		Error:          fmt.Sprintf("retry %d/%d in %s: %s", n.Attempts, n.MaxAttempts, delay, errMsg),
 	})
+}
+
+func (p *Processor) ack(ctx context.Context, msgs ...queue.Message) {
+	if len(msgs) == 0 {
+		return
+	}
+	ch := string(msgs[0].Channel)
+	if err := p.consumer.Ack(ctx, ch, msgs...); err != nil {
+		p.logger.Error("ack failed", "error", err, "channel", ch)
+	}
 }
